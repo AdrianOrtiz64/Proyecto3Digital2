@@ -1,0 +1,90 @@
+//******************************************/
+// BE3029 - Electronica Digital 2
+// 17/11/2025
+// Proyecto 3 - I2C y NeoPixel
+// MCU: ESP32 dev kit 1.0
+//******************************************/
+
+//******************************************/
+// Librerias
+//******************************************/
+#include <Arduino.h>
+#include "Wire.h"
+#include <Adafruit_NeoPixel.h>
+#include <AHT10.h>
+
+//******************************************/
+// Definiciones
+//******************************************/
+
+#define RXD2 16
+#define TXD2 17
+#define SDA_PIN 21
+#define SCL_PIN 22
+
+
+
+//******************************************/
+// Variables globales
+//******************************************/
+
+HardwareSerial SerialESP(2);
+AHT10 aht10(AHT10_ADDRESS_0X38);
+
+float temp = 0;
+float hum = 0;
+
+//******************************************/
+// Prototipos de funciones
+//******************************************/
+
+void leerAHT(float &temp, float &hum);
+
+//******************************************/
+// Configuración
+//******************************************/
+
+void setup() {
+  Serial.begin(115200);
+  SerialESP.begin(9600, SERIAL_8N1, RXD2, TXD2);
+
+  Wire.begin(SDA_PIN, SCL_PIN);
+
+  if(aht10.begin() != true){
+        Serial.println("Error inicializando AHT10");
+    } else {
+        Serial.println("AHT10 inicializado correctamente");
+    }
+  
+}
+
+void loop() {
+
+  static unsigned long t0 = 0;
+  if (millis() - t0 > 1000) {
+      t0 = millis();
+      temp = aht10.readTemperature();
+      hum  = aht10.readHumidity();
+  }
+
+  if (SerialESP.available()) {
+    char cmd = SerialESP.read();
+    if (cmd == 'R') {   // Request
+      String msg = "{\"T\":" + String(temp) + ",\"H\":" + String(hum) + "}";
+      SerialESP.println(msg);   // Enviar datos por uart al nucleo
+      }
+  }
+
+
+  
+}
+
+
+
+//******************************************/
+// Otras funciones
+//******************************************/
+void leerAHT(float &temp, float &hum) {
+    temp = aht10.readTemperature();
+    hum = aht10.readHumidity();
+}
