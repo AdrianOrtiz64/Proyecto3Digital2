@@ -1,0 +1,163 @@
+//******************************************/
+// BE3029 - Electronica Digital 2
+// 17/11/2025
+// Proyecto 3 - I2C y NeoPixel
+// MCU: ESP32 dev kit 1.0
+//******************************************/
+
+//******************************************/
+// Librerias
+//******************************************/
+#include <Arduino.h>
+#include "Wire.h"
+#include <Adafruit_NeoPixel.h>
+#include <AHT10.h>
+
+//******************************************/
+// Definiciones
+//******************************************/
+
+#define RXD2 16
+#define TXD2 17
+
+#define SDA_PIN 21
+#define SCL_PIN 22
+
+#define NEOPIXEL_PIN 26
+#define NUMPIXELS 1
+
+#define TEMP_THRESHOLD_HIGH 30.0   // encender NeoPixel rojo 
+#define TEMP_THRESHOLD_LOW  20.0   // NeoPixel verde o apagado
+
+#define CMD_MEASURE 'M'   // Comando medir bajo demanda
+#define CMD_STATUS  'S'   // Comando para enviar estado
+#define CMD_COLOR   'C'   // Comando color del NeoPixel
+
+//******************************************/
+// Variables globales
+//******************************************/
+
+bool shouldSaveData = false;     
+bool newMeasurementReady = false; 
+uint32_t lastMeasurementTime = 0; 
+
+float temp = 0;
+float hum = 0;
+
+HardwareSerial SerialESP(2);
+AHT10 aht10(AHT10_ADDRESS_0X38);
+
+enum SystemState {
+  STATE_IDLE,
+  STATE_MEASURING,
+  STATE_SENDING,
+  STATE_SAVING
+};
+
+struct SystemFlags {
+  bool highTempAlert;
+  bool lowTempAlert;
+  bool sensorOK;
+};
+SystemFlags flags = {false, false, true};
+
+SystemState currentState = STATE_IDLE;
+Adafruit_NeoPixel px(NUMPIXELS, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
+
+//******************************************/
+// Prototipos de funciones
+//******************************************/
+
+void leerAHT(float &temp, float &hum);
+void pixelSetColor(uint8_t r, uint8_t g, uint8_t b);
+void updateSystemState(SystemState newState);
+
+void processCommand(char cmd);           
+void handleNeoPixel(float t);            
+void sendStatus();                       
+void saveMeasurementRequest();           
+void performMeasurement();               
+
+//******************************************/
+// Configuración
+//******************************************/
+
+void setup() {
+  Serial.begin(115200);
+  SerialESP.begin(115200, SERIAL_8N1, RXD2, TXD2);
+  
+  Serial.println("ESP32 Iniciado");
+  Serial.println("Configurando AHT10...");
+
+  Wire.begin(SDA_PIN, SCL_PIN);
+  delay(100);  // Pequeño delay después de begin
+
+  // Intentar inicialización múltiple
+  bool aht_ok = false;
+  for(int i = 0; i < 5; i++) {
+    if(aht10.begin() == true) {
+      aht_ok = true;
+      break;
+    }
+    Serial.printf("Intento %d: AHT10 fallo, reintentando...\n", i+1);
+    delay(500);
+  }
+  
+  if(aht_ok) {
+    Serial.println("OK: AHT10 inicializado correctamente");
+  } else {
+    Serial.println("ERROR: AHT10 no pudo inicializarse después de 5 intentos");
+  }
+  
+  // Test de comunicación UART
+  SerialESP.println("ESP32_LISTO"); 
+  Serial.println("Mensaje de prueba enviado por UART");
+}
+
+void loop() {
+
+  static unsigned long lastRead = 0;
+  static unsigned long lastDebug = 0;
+
+  if (millis() - lastRead > 2000) {
+      lastRead = millis();
+      temp = aht10.readTemperature();
+      hum  = aht10.readHumidity();
+
+      Serial.printf("Temp: %.1fC, Hum: %.1f%%\n", temp, hum);
+  }
+
+  if (millis() - lastDebug > 5000) {
+      lastDebug = millis();
+      Serial.println("ESP32 esperando comandos...");
+  }
+
+  if (SerialESP.available()) {
+    String command = SerialESP.readStringUntil('\n');
+    command.trim();
+    
+    Serial.printf("COMANDO RECIBIDO: '%s'\n", command.c_str());
+
+    if (command == "R") {   
+      String msg = "T:" + String(temp, 1) + ",H:" + String(hum, 1);  
+      SerialESP.println(msg);  
+      Serial.printf("Enviado: %s", msg.c_str());   
+    }
+
+    delay(100);    
+
+  }
+
+
+  
+}
+
+
+
+//******************************************/
+// Otras funciones
+//******************************************/
+void leerAHT(float &temp, float &hum) {
+    temp = aht10.readTemperature();
+    hum = aht10.readHumidity();
+}
