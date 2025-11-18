@@ -1,0 +1,218 @@
+//******************************************/
+// BE3029 - Electronica Digital 2
+// 17/11/2025
+// Proyecto 3 - I2C y NeoPixel
+// MCU: ESP32 dev kit 1.0
+//******************************************/
+
+//******************************************/
+// Librerias
+//******************************************/
+#include <Arduino.h>
+#include "Wire.h"
+#include <Adafruit_NeoPixel.h>
+#include <AHT10.h>
+
+//******************************************/
+// Definiciones
+//******************************************/
+
+#define RXD2 16
+#define TXD2 17
+
+#define SDA_PIN 21
+#define SCL_PIN 22
+
+#define NEOPIXEL_PIN 26
+#define NUMPIXELS 1
+
+// Estados neopixel
+enum SystemState {
+  STATE_BOOT,        // Inicializando
+  STATE_READY,       // Listo (verde)
+  STATE_MEASURING,   // Midiendo (azul)
+  STATE_SENDING,     // Transmitiendo (amarillo)
+  STATE_ERROR        // Error (rojo)
+};
+
+#define COLOR_BOOT      0x000055  // Azul suave (inicializando)
+#define COLOR_READY     0x00FF00  // Verde (listo)
+#define COLOR_MEASURING 0x0000FF  // Azul (midiendo)
+#define COLOR_SENDING   0xFFFF00  // Amarillo (transmitiendo)
+#define COLOR_ERROR     0xFF0000  // Rojo (error)
+
+//******************************************/
+// Variables globales
+//******************************************/
+
+float temp = 0;
+float hum = 0;
+
+HardwareSerial SerialESP(2);
+AHT10 aht10(AHT10_ADDRESS_0X38);
+Adafruit_NeoPixel px(NUMPIXELS, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
+SystemState currentState = STATE_BOOT;
+bool aht10_initialized = false;
+
+//******************************************/
+// Prototipos de funciones
+//******************************************/
+
+void leerAHT(float &temp, float &hum);
+
+void setNeoPixelColor(uint32_t color);
+void updateSystemState(SystemState newState);
+void blinkNeoPixel(uint32_t color, int times, int delay_ms);
+void performMeasurement();
+
+//******************************************/
+// Configuración
+//******************************************/
+
+void setup() {
+  Serial.begin(115200);
+  SerialESP.begin(115200, SERIAL_8N1, RXD2, TXD2);
+
+  px.begin();
+  px.setBrightness(50);  
+  updateSystemState(STATE_BOOT);
+  
+  Serial.println("ESP32 Iniciado");
+  Serial.println("Configurando AHT10...");
+
+  Wire.begin(SDA_PIN, SCL_PIN);
+  delay(100);  
+
+  bool aht_ok = false;
+  for(int i = 0; i < 5; i++) {
+    if(aht10.begin() == true) {
+      aht_ok = true;
+      break;
+    }
+    Serial.printf("Intento %d: AHT10 fallo, reintentando...\n", i+1);
+    delay(500);
+  }
+  
+  if(aht_ok) {
+    Serial.println("OK: AHT10 inicializado correctamente");
+    performMeasurement();
+  } else {
+    Serial.println("ERROR: AHT10 no pudo inicializarse después de 5 intentos");
+    updateSystemState(STATE_ERROR);
+    return;
+  }
+
+  updateSystemState(STATE_READY);
+  
+  // Test de comunicación UART
+  SerialESP.println("ESP32_LISTO"); 
+  Serial.println("Mensaje de prueba enviado por UART");
+}
+
+void loop() {
+  static unsigned long lastDebug = 0;
+
+  // Debug cada 5 segundos
+  if (millis() - lastDebug > 5000) {
+    lastDebug = millis();
+    Serial.printf("Estado: %d, Temp: %.1f°C, Hum: %.1f%%\n", currentState, temp, hum);
+  }
+
+  
+  if (SerialESP.available()) {
+    String command = SerialESP.readStringUntil('\n');
+    command.trim();
+    
+    Serial.printf("COMANDO RECIBIDO: '%s'\n", command.c_str());
+
+    if (command == "R") {   
+      
+      updateSystemState(STATE_MEASURING);
+      delay(1000); 
+      performMeasurement();
+      
+      
+      updateSystemState(STATE_SENDING);
+      delay(1000); 
+      String msg = "T:" + String(temp, 1) + ",H:" + String(hum, 1);  
+      SerialESP.println(msg);  
+      Serial.printf("Enviado: %s\n", msg.c_str());   
+
+      
+      blinkNeoPixel(COLOR_SENDING, 2, 50);
+
+      
+      updateSystemState(STATE_READY);
+    }
+
+    delay(10); 
+  }
+}
+
+
+
+//******************************************/
+// Otras funciones
+//******************************************/
+void leerAHT(float &temp, float &hum) {
+    temp = aht10.readTemperature();
+    hum = aht10.readHumidity();
+}
+
+void performMeasurement() {
+    float new_temp = aht10.readTemperature();
+    float new_hum = aht10.readHumidity();
+
+    if (!isnan(new_temp) && !isnan(new_hum)) {
+        temp = new_temp;
+        hum = new_hum;
+        Serial.printf("Medición: %.1f°C, %.1f%% humedad\n", temp, hum);
+    } else {
+        Serial.println("Error en medición del sensor");
+        updateSystemState(STATE_ERROR);
+        delay(1000); 
+    }
+}
+
+void setNeoPixelColor(uint32_t color) {
+  px.setPixelColor(0, color);
+  px.show();
+}
+
+void updateSystemState(SystemState newState) {
+  if (currentState != newState) {
+    currentState = newState;
+    
+    switch(newState) {
+      case STATE_BOOT:
+        setNeoPixelColor(COLOR_BOOT);
+        break;
+      case STATE_READY:
+        setNeoPixelColor(COLOR_READY);
+        break;
+      case STATE_MEASURING:
+        setNeoPixelColor(COLOR_MEASURING);
+        break;
+      case STATE_SENDING:
+        setNeoPixelColor(COLOR_SENDING);
+        break;
+      case STATE_ERROR:
+        setNeoPixelColor(COLOR_ERROR);
+        break;
+    }
+  }
+}
+
+void blinkNeoPixel(uint32_t color, int times, int delay_ms) {
+  uint32_t originalColor = px.getPixelColor(0);
+  
+  for(int i = 0; i < times; i++) {
+    setNeoPixelColor(color);
+    delay(delay_ms);
+    setNeoPixelColor(0);  
+    delay(delay_ms);
+  }
+  
+  
+  setNeoPixelColor(originalColor);
+}
